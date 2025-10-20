@@ -111,6 +111,121 @@ INDICATOR_GROUPS = {
     'Оборачиваемость': ['выручка', 'запасы', 'дебиторская задолженность', 'активы всего']
 }
 
+# === ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ===
+
+def save_uploaded_file(file_bytes, user_id, file_name):
+    """Сохраняет загруженный файл на сервере"""
+    try:
+        user_dir = f"temp_files/user_{user_id}"
+        os.makedirs(user_dir, exist_ok=True)
+        
+        file_path = os.path.join(user_dir, file_name)
+        with open(file_path, 'wb') as f:
+            f.write(file_bytes)
+        
+        return file_path
+    except Exception as e:
+        print(f"❌ Ошибка сохранения файла: {e}")
+        return None
+
+def save_user_data(user_id, data):
+    """Сохраняет данные пользователя в файл"""
+    try:
+        user_dir = f"temp_files/user_{user_id}"
+        os.makedirs(user_dir, exist_ok=True)
+        
+        data_file = os.path.join(user_dir, 'user_data.json')
+        with open(data_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        
+        return True
+    except Exception as e:
+        print(f"❌ Ошибка сохранения данных: {e}")
+        return False
+
+def load_user_data_with_fallback(context, user_id):
+    """Загружает данные пользователя с возвратом к файловому хранилищу"""
+    try:
+        # Сначала проверяем, есть ли данные в контексте
+        if 'periods_data' in context.user_data and context.user_data['periods_data']:
+            return True
+        
+        # Если нет в контексте, пробуем загрузить из файла
+        user_dir = f"temp_files/user_{user_id}"
+        data_file = os.path.join(user_dir, 'user_data.json')
+        
+        if os.path.exists(data_file):
+            with open(data_file, 'r', encoding='utf-8') as f:
+                user_data = json.load(f)
+                context.user_data.update(user_data)
+            return True
+        
+        return False
+    except Exception as e:
+        print(f"❌ Ошибка загрузки данных: {e}")
+        return False
+
+async def template_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показывает шаблон для заполнения"""
+    template = """
+📋 **ШАБЛОН ОТЧЕТНОСТИ С ПЕРИОДАМИ:**
+
+| Наименование показателя | 31.12.2022 | 31.12.2023 | 31.12.2024 |
+|-------------------------|------------|------------|------------|
+| Выручка                 | 800,000    | 1,000,000  | 1,200,000  |
+| Чистая прибыль          | 150,000    | 200,000    | 250,000    |
+| Основные средства       | 450,000    | 500,000    | 550,000    |
+| Запасы                  | 120,000    | 150,000    | 180,000    |
+| Дебиторская задолженность | 80,000   | 100,000    | 120,000    |
+| Денежные средства       | 40,000     | 50,000     | 60,000     |
+| Итого активы            | 750,000    | 800,000    | 850,000    |
+| Уставный капитал        | 300,000    | 300,000    | 300,000    |
+| Нераспределенная прибыль | 120,000   | 200,000    | 250,000    |
+| Краткосрочные обязательства | 330,000 | 300,000 | 300,000 |
+
+💡 **Бот понимает различные форматы дат**
+"""
+    await update.message.reply_text(template)
+
+async def sample_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Создает пример файла с периодами для тестирования"""
+    sample_data = {
+        'Наименование показателя': [
+            'Выручка', 
+            'Чистая прибыль', 
+            'Основные средства', 
+            'Запасы',
+            'Дебиторская задолженность', 
+            'Денежные средства', 
+            'Итого активы',
+            'Уставный капитал', 
+            'Нераспределенная прибыль', 
+            'Краткосрочные обязательства'
+        ],
+        '31.12.2022': [800000, 150000, 450000, 120000, 80000, 40000, 750000, 
+                       300000, 120000, 330000],
+        '31.12.2023': [1000000, 200000, 500000, 150000, 100000, 50000, 800000,
+                       300000, 200000, 300000],
+        '31.12.2024': [1200000, 250000, 550000, 180000, 120000, 60000, 850000,
+                       300000, 250000, 300000]
+    }
+    
+    df = pd.DataFrame(sample_data)
+    
+    # Сохраняем в буфер
+    buffer = io.BytesIO()
+    with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+        df.to_excel(writer, sheet_name='Отчетность по периодам', index=False)
+    
+    buffer.seek(0)
+    
+    # Отправляем файл
+    await update.message.reply_document(
+        document=buffer,
+        filename='пример_отчетности_с_периодами.xlsx',
+        caption='📋 Вот пример файла с отчетами за несколько периодов. Отправьте его боту для анализа динамики!'
+    )
+    
 # === ОСНОВНЫЕ ОБРАБОТЧИКИ КОМАНД ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Улучшенный обработчик команды /start с меню выбора"""
@@ -1296,96 +1411,6 @@ async def export_to_txt(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     except Exception as e:
         await update.message.reply_text(f"❌ Ошибка создания файла: {str(e)}")
-
-# === ОБНОВЛЕННАЯ ФУНКЦИЯ ПРИЕМА ФАЙЛОВ ===
-
-async def receive_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик загрузки Excel файлов"""
-    try:
-        user_id = update.message.from_user.id
-        
-        if not update.message.document:
-            await update.message.reply_text("📎 Пожалуйста, пришлите Excel файл с отчетностью")
-            return
-
-        file = update.message.document
-        file_name = file.file_name.lower()
-
-        if not (file_name.endswith('.xlsx') or file_name.endswith('.xls')):
-            await update.message.reply_text("❌ Пожалуйста, пришлите файл в формате Excel (.xlsx или .xls)")
-            return
-
-        await update.message.reply_text("⏳ Анализирую структуру файла...")
-
-        # Скачиваем файл
-        file_obj = await file.get_file()
-        file_bytes = await file_obj.download_as_bytearray()
-
-        # Сохраняем файл
-        file_path = save_uploaded_file(file_bytes, user_id, file_name)
-        if not file_path:
-            await update.message.reply_text("❌ Ошибка сохранения файла")
-            return
-
-        # Читаем Excel файл
-        try:
-            df = read_excel_file(file_bytes, file_name)
-        except Exception as e:
-            await update.message.reply_text(f"❌ Ошибка чтения файла: {str(e)}")
-            return
-        
-        # Определяем периоды
-        periods = detect_periods(df)
-        
-        if not periods:
-            await update.message.reply_text("❌ Не удалось определить периоды в файле")
-            return
-        
-        # Извлекаем данные по периодам
-        periods_data = extract_financial_data_by_period(df, periods)
-        
-        # Сохраняем данные в файл
-        user_data = {
-            'periods_data': periods_data,
-            'file_name': file_name,
-            'file_path': file_path,
-            'loaded_at': datetime.now().isoformat()
-        }
-        
-        print(f"🔍 Пытаюсь сохранить данные для пользователя {user_id}")
-        print(f"📊 Данные периодов: {len(periods_data)} периодов")
-        
-        save_result = save_user_data(user_id, user_data)
-        
-        if save_result:
-            # Также сохраняем в контекст для текущей сессии
-            context.user_data.update(user_data)
-            
-            extracted_count = sum(len(data) for data in periods_data.values())
-            await update.message.reply_text(
-                f"✅ Файл успешно обработан и сохранен!\n"
-                f"📊 Извлечено показателей: {extracted_count}\n"
-                f"📅 Периодов: {len(periods)}\n"
-                f"💾 **Данные сохранены для будущих сессий**\n\n"
-                f"🎯 **Теперь выберите тип анализа:**"
-            )
-            await start(update, context)
-        else:
-            print(f"❌ Ошибка сохранения данных для пользователя {user_id}")
-            await update.message.reply_text(
-                "❌ Ошибка сохранения данных\n\n"
-                "💡 **Возможные причины:**\n"
-                "• Недостаточно прав для записи файлов\n"
-                "• Недостаточно места на диске\n"
-                "• Антивирус блокирует запись\n\n"
-                "🔄 **Решение:**\n"
-                "• Запустите бота от имени администратора\n"
-                "• Используйте команду /debug_save для диагностики"
-            )
-
-    except Exception as e:
-        await update.message.reply_text(f"❌ Ошибка при анализе: {str(e)}")
-        print(f"Ошибка: {e}")
 
 # === ОБРАБОТЧИК СООБЩЕНИЙ ===
 
